@@ -26,6 +26,8 @@ import collections
 import os
 import sys
 from typing import Dict, Iterable, List, NamedTuple
+# Import defaultdict for explicit type hinting
+from collections import defaultdict
 
 # Gracefully handle missing dependencies, which is a common operational issue.
 try:
@@ -38,17 +40,20 @@ except ImportError as e:
     sys.exit(1)
 
 
-# Using a class-based structure for the named tuple for better type hinting.
+# Renamed 'count' to 'pkg_count' to avoid name collision with the
+# built-in tuple.count() method, which resolves mypy errors.
 class UpgradeInfo(NamedTuple):
     labels: Dict[str, str]
-    count: int
+    pkg_count: int
 
 
 def _convert_candidates_to_upgrade_infos(
     candidates: Iterable[apt.package.Package],
 ) -> List[UpgradeInfo]:
     """Groups package candidates by origin and architecture."""
-    changes_dict = collections.defaultdict(lambda: collections.defaultdict(int))
+    changes_dict: defaultdict[str, defaultdict[str, int]] = collections.defaultdict(
+        lambda: collections.defaultdict(int)
+    )
 
     for candidate in candidates:
         # Gracefully handle packages with no origins.
@@ -68,7 +73,7 @@ def _convert_candidates_to_upgrade_infos(
             changes_list.append(
                 UpgradeInfo(
                     labels=dict(origin=origin, arch=arch),
-                    count=count,
+                    pkg_count=count,
                 )
             )
 
@@ -90,7 +95,7 @@ def _write_pending_upgrades(
             registry=registry,
         )
         for change in upgrade_list:
-            g.labels(**change.labels).set(change.count)
+            g.labels(**change.labels).set(change.pkg_count)
 
 
 def _write_held_upgrades(registry: CollectorRegistry, cache: apt.cache.Cache) -> None:
@@ -110,7 +115,7 @@ def _write_held_upgrades(registry: CollectorRegistry, cache: apt.cache.Cache) ->
             registry=registry,
         )
         for change in upgrade_list:
-            g.labels(**change.labels).set(change.count)
+            g.labels(**change.labels).set(change.pkg_count)
 
 
 def _write_autoremove_pending(
@@ -136,12 +141,16 @@ def _write_cache_timestamps(registry: CollectorRegistry) -> None:
     stamp_file = None
     try:
         apt_pkg.init_config()
-        # Prefer the official periodic update stamp file if it exists.
         periodic_stamp = "/var/lib/apt/periodic/update-success-stamp"
-        if (
-            apt_pkg.config.find_b("APT::Periodic::Update-Package-Lists", "0") != "0"
-            and os.path.isfile(periodic_stamp)
-        ):
+
+        # FIX: Use apt_pkg.config.find() to fetch the value as a string,
+        # which correctly handles a string default and prevents the TypeError.
+        is_periodic_update_enabled = (
+            apt_pkg.config.find("APT::Periodic::Update-Package-Lists", "0") != "0"
+        )
+
+        # Prefer the official periodic update stamp file if it exists.
+        if is_periodic_update_enabled and os.path.isfile(periodic_stamp):
             stamp_file = periodic_stamp
         else:
             # Fallback to the partial directory mtime as a less accurate indicator.
